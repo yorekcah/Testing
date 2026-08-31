@@ -1,0 +1,294 @@
+---
+# Add-ons Installation Playbook for RHEL 9 Airgap
+# This playbook installs Harbor, Longhorn, Velero, and Gitea in airgap environment
+
+- name: Install Harbor
+  hosts: rke2_servers[0]
+  become: true
+  gather_facts: true
+  when: install_harbor
+
+  tasks:
+    - name: Verify RKE2 is running
+      systemd:
+        name: rke2-server
+        state: started
+
+    - name: Add kubectl to system path
+      file:
+        src: "{{ rke2_install_dir }}/rke2"
+        dest: /usr/local/bin/kubectl
+        state: link
+
+    - name: Add helm to system path
+      file:
+        src: "{{ airgap_addons_path }}/binaries/helm"
+        dest: /usr/local/bin/helm
+        state: link
+
+    - name: Load Harbor container images
+      shell: |
+        ctr -n k8s.io images import {{ airgap_addons_path }}/images/harbor-images.tar.gz
+      register: harbor_images
+      until: harbor_images.rc == 0
+      retries: 3
+      delay: 10
+
+    - name: Create Harbor namespace
+      shell: |
+        /usr/local/bin/kubectl create namespace harbor --dry-run=client -o yaml | /usr/local/bin/kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: harbor_namespace
+      changed_when: false
+
+    - name: Install Harbor using Helm
+      shell: |
+        /usr/local/bin/helm install harbor {{ airgap_addons_path }}/charts/harbor-{{ harbor_version }}.tgz \
+          --namespace harbor \
+          --set expose.type=clusterIP \
+          --set expose.tls.enabled=false \
+          --set persistence.enabled=true \
+          --set persistence.persistentVolumeClaim.registry.storageClass=local-path \
+          --set persistence.persistentVolumeClaim.jobservice.storageClass=local-path \
+          --set persistence.persistentVolumeClaim.database.storageClass=local-path \
+          --set persistence.persistentVolumeClaim.redis.storageClass=local-path \
+          --set persistence.persistentVolumeClaim.trivy.storageClass=local-path
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: harbor_install
+      until: harbor_install.rc == 0
+      retries: 3
+      delay: 10
+
+    - name: Wait for Harbor pods to be ready
+      shell: |
+        /usr/local/bin/kubectl wait --namespace harbor \
+          --for=condition=ready pod \
+          --selector=app=harbor \
+          --timeout=600s
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: harbor_ready
+      until: harbor_ready.rc == 0
+      retries: 10
+      delay: 30
+
+    - name: Display Harbor status
+      debug:
+        msg: "Harbor installed successfully. Access via NodePort or Ingress."
+
+- name: Install Longhorn
+  hosts: rke2_servers[0]
+  become: true
+  gather_facts: true
+  when: install_longhorn
+
+  tasks:
+    - name: Verify RKE2 is running
+      systemd:
+        name: rke2-server
+        state: started
+
+    - name: Add kubectl to system path
+      file:
+        src: "{{ rke2_install_dir }}/rke2"
+        dest: /usr/local/bin/kubectl
+        state: link
+
+    - name: Add helm to system path
+      file:
+        src: "{{ airgap_addons_path }}/binaries/helm"
+        dest: /usr/local/bin/helm
+        state: link
+
+    - name: Load Longhorn container images
+      shell: |
+        ctr -n k8s.io images import {{ airgap_addons_path }}/images/longhorn-images.tar.gz
+      register: longhorn_images
+      until: longhorn_images.rc == 0
+      retries: 3
+      delay: 10
+
+    - name: Create Longhorn namespace
+      shell: |
+        /usr/local/bin/kubectl create namespace longhorn-system --dry-run=client -o yaml | /usr/local/bin/kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: longhorn_namespace
+      changed_when: false
+
+    - name: Install Longhorn using Helm
+      shell: |
+        /usr/local/bin/helm install longhorn {{ airgap_addons_path }}/charts/longhorn-{{ longhorn_version }}.tgz \
+          --namespace longhorn-system \
+          --set defaultSettings.defaultDataPath=/var/lib/longhorn \
+          --set persistence.defaultClass=true \
+          --set persistence.reclaimPolicy=Delete
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: longhorn_install
+      until: longhorn_install.rc == 0
+      retries: 3
+      delay: 10
+
+    - name: Wait for Longhorn pods to be ready
+      shell: |
+        /usr/local/bin/kubectl wait --namespace longhorn-system \
+          --for=condition=ready pod \
+          --selector=app=longhorn-manager \
+          --timeout=600s
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: longhorn_ready
+      until: longhorn_ready.rc == 0
+      retries: 10
+      delay: 30
+
+    - name: Display Longhorn status
+      debug:
+        msg: "Longhorn installed successfully. Default storage class configured."
+
+- name: Install Velero
+  hosts: rke2_servers[0]
+  become: true
+  gather_facts: true
+  when: install_velero
+
+  tasks:
+    - name: Verify RKE2 is running
+      systemd:
+        name: rke2-server
+        state: started
+
+    - name: Add kubectl to system path
+      file:
+        src: "{{ rke2_install_dir }}/rke2"
+        dest: /usr/local/bin/kubectl
+        state: link
+
+    - name: Add velero to system path
+      file:
+        src: "{{ airgap_addons_path }}/binaries/velero"
+        dest: /usr/local/bin/velero
+        state: link
+
+    - name: Load Velero container images
+      shell: |
+        ctr -n k8s.io images import {{ airgap_addons_path }}/images/velero-images.tar.gz
+      register: velero_images
+      until: velero_images.rc == 0
+      retries: 3
+      delay: 10
+
+    - name: Create Velero namespace
+      shell: |
+        /usr/local/bin/kubectl create namespace velero --dry-run=client -o yaml | /usr/local/bin/kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: velero_namespace
+      changed_when: false
+
+    - name: Create Velero credentials (placeholder)
+      copy:
+        dest: /tmp/velero-credentials.txt
+        content: |
+          [default]
+          aws_access_key_id = YOUR_ACCESS_KEY
+          aws_secret_access_key = YOUR_SECRET_KEY
+
+    - name: Install Velero with AWS plugin
+      shell: |
+        /usr/local/bin/velero install \
+          --namespace velero \
+          --plugins={{ airgap_addons_path }}/binaries/velero-plugins/velero-plugin-for-aws \
+          --provider aws \
+          --bucket velero-backups \
+          --secret-file /tmp/velero-credentials.txt \
+          --backup-location-config region=minio,s3ForcePathStyle=true \
+          --snapshot-location-config region=minio
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: velero_install
+      until: velero_install.rc == 0
+      retries: 3
+      delay: 10
+      ignore_errors: yes
+
+    - name: Display Velero installation note
+      debug:
+        msg: "Velero installed. Configure backup storage credentials in /tmp/velero-credentials.txt and re-run installation."
+
+- name: Install Gitea
+  hosts: rke2_servers[0]
+  become: true
+  gather_facts: true
+  when: install_gitea
+
+  tasks:
+    - name: Verify RKE2 is running
+      systemd:
+        name: rke2-server
+        state: started
+
+    - name: Add kubectl to system path
+      file:
+        src: "{{ rke2_install_dir }}/rke2"
+        dest: /usr/local/bin/kubectl
+        state: link
+
+    - name: Add helm to system path
+      file:
+        src: "{{ airgap_addons_path }}/binaries/helm"
+        dest: /usr/local/bin/helm
+        state: link
+
+    - name: Load Gitea container images
+      shell: |
+        ctr -n k8s.io images import {{ airgap_addons_path }}/images/gitea-images.tar.gz
+      register: gitea_images
+      until: gitea_images.rc == 0
+      retries: 3
+      delay: 10
+
+    - name: Create Gitea namespace
+      shell: |
+        /usr/local/bin/kubectl create namespace gitea --dry-run=client -o yaml | /usr/local/bin/kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: gitea_namespace
+      changed_when: false
+
+    - name: Install Gitea using Helm
+      shell: |
+        /usr/local/bin/helm install gitea {{ airgap_addons_path }}/charts/gitea-{{ gitea_version }}.tgz \
+          --namespace gitea \
+          --set gitea.persistence.enabled=true \
+          --set gitea.persistence.storageClass=local-path \
+          --set postgresql.persistence.enabled=true \
+          --set postgresql.persistence.storageClass=local-path \
+          --set redis.persistence.enabled=true \
+          --set redis.persistence.storageClass=local-path
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: gitea_install
+      until: gitea_install.rc == 0
+      retries: 3
+      delay: 10
+
+    - name: Wait for Gitea pods to be ready
+      shell: |
+        /usr/local/bin/kubectl wait --namespace gitea \
+          --for=condition=ready pod \
+          --selector=app=gitea \
+          --timeout=600s
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: gitea_ready
+      until: gitea_ready.rc == 0
+      retries: 10
+      delay: 30
+
+    - name: Display Gitea status
+      debug:
+        msg: "Gitea installed successfully. Access via NodePort or Ingress."

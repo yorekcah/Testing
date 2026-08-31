@@ -1,0 +1,46 @@
+# Example MetalLB Configuration
+# This file shows how to customize MetalLB settings
+
+# Layer 2 Configuration (Default)
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: default-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - 192.168.1.200-192.168.1.250
+  autoAssign: true
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: default
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - default-pool
+
+# BGP Configuration (Alternative)
+# Uncomment if using BGP mode
+# ---
+# apiVersion: metallb.io/v1beta1
+# kind: BGPPeer
+# metadata:
+#   name: bgp-peer
+#   namespace: metallb-system
+# spec:
+#   peerAddress: 192.168.1.1
+#   peerASN: 65000
+#   myASN: 65001
+#   routerID: 192.168.1.199
+# ---
+# apiVersion: metallb.io/v1beta1
+# kind: BGPAdvertisement
+# metadata:
+#   name: bgp-adv
+#   namespace: metallb-system
+# spec:
+#   ipAddressPools:
+#     - default-pool
+#   aggregationLength: 32

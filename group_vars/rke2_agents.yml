@@ -1,0 +1,14 @@
+---
+# RKE2 Agent Worker Variables
+
+# RKE2 Agent Configuration
+rke2_agent_config:
+  server-url: "https://{{ api_server_loadbalancer_ip }}:{{ api_server_port }}"
+  token-file: "/etc/rancher/rke2/rke2-token"
+  node-name: "{{ inventory_hostname }}"
+
+# Agent specific packages
+agent_packages:
+  - curl
+  - wget
+  - ca-certificates

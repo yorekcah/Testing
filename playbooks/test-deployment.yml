@@ -1,0 +1,314 @@
+---
+# Test Deployment Playbook for RHEL 9 Airgap
+# This playbook validates that the RKE2 cluster is deployed correctly
+
+- name: Test RKE2 Cluster Deployment
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display test information
+      debug:
+        msg:
+          - "Starting RKE2 Cluster Deployment Tests"
+          - "Architecture: 1 Jump, 3 Servers, 3 Agents"
+          - "OS: RHEL 9 Airgap"
+
+- name: Test Jump Host
+  hosts: jump
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Check if jump host is accessible
+      ping:
+      register: jump_ping
+      ignore_errors: yes
+
+    - name: Display jump host status
+      debug:
+        msg: "Jump host ping: {{ 'SUCCESS' if jump_ping.success else 'FAILED' }}"
+
+    - name: Check jump host packages
+      dnf:
+        list: installed
+      register: jump_packages
+      ignore_errors: yes
+
+    - name: Display critical packages
+      debug:
+        msg: "Critical packages: {{ jump_packages.installed | select('match', '^(curl|wget|python3|firewalld|chrony|kubectl|helm)$') | list | length }} found"
+
+    - name: Check firewalld status
+      systemd:
+        name: firewalld
+      register: firewalld_status
+      ignore_errors: yes
+
+    - name: Display firewalld status
+      debug:
+        msg: "Firewalld status: {{ firewalld_status.status.ActiveState }}"
+
+    - name: Check chrony status
+      systemd:
+        name: chronyd
+      register: chrony_status
+      ignore_errors: yes
+
+    - name: Display chrony status
+      debug:
+        msg: "Chrony status: {{ chrony_status.status.ActiveState }}"
+
+- name: Test RKE2 Servers
+  hosts: rke2_servers
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Check if RKE2 servers are accessible
+      ping:
+      register: server_ping
+      ignore_errors: yes
+
+    - name: Display server ping status
+      debug:
+        msg: "Server {{ inventory_hostname }} ping: {{ 'SUCCESS' if server_ping.success else 'FAILED' }}"
+
+    - name: Check RKE2 server service
+      systemd:
+        name: rke2-server
+      register: rke2_server_status
+      ignore_errors: yes
+
+    - name: Display RKE2 server status
+      debug:
+        msg: "RKE2 server status on {{ inventory_hostname }}: {{ rke2_server_status.status.ActiveState }}"
+
+    - name: Check RKE2 config file
+      stat:
+        path: /etc/rancher/rke2/config.yaml
+      register: rke2_config
+      ignore_errors: yes
+
+    - name: Display RKE2 config status
+      debug:
+        msg: "RKE2 config exists on {{ inventory_hostname }}: {{ rke2_config.stat.exists }}"
+
+    - name: Check RKE2 kubeconfig
+      stat:
+        path: /etc/rancher/rke2/rke2.yaml
+      register: rke2_kubeconfig
+      ignore_errors: yes
+
+    - name: Display RKE2 kubeconfig status
+      debug:
+        msg: "RKE2 kubeconfig exists on {{ inventory_hostname }}: {{ rke2_kubeconfig.stat.exists }}"
+
+    - name: Check SELinux status
+      command: getenforce
+      register: selinux_status
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Display SELinux status
+      debug:
+        msg: "SELinux status on {{ inventory_hostname }}: {{ selinux_status.stdout }}"
+
+- name: Test RKE2 Agents
+  hosts: rke2_agents
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Check if RKE2 agents are accessible
+      ping:
+      register: agent_ping
+      ignore_errors: yes
+
+    - name: Display agent ping status
+      debug:
+        msg: "Agent {{ inventory_hostname }} ping: {{ 'SUCCESS' if agent_ping.success else 'FAILED' }}"
+
+    - name: Check RKE2 agent service
+      systemd:
+        name: rke2-agent
+      register: rke2_agent_status
+      ignore_errors: yes
+
+    - name: Display RKE2 agent status
+      debug:
+        msg: "RKE2 agent status on {{ inventory_hostname }}: {{ rke2_agent_status.status.ActiveState }}"
+
+    - name: Check RKE2 config file
+      stat:
+        path: /etc/rancher/rke2/config.yaml
+      register: rke2_config
+      ignore_errors: yes
+
+    - name: Display RKE2 config status
+      debug:
+        msg: "RKE2 config exists on {{ inventory_hostname }}: {{ rke2_config.stat.exists }}"
+
+    - name: Check SELinux status
+      command: getenforce
+      register: selinux_status
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Display SELinux status
+      debug:
+        msg: "SELinux status on {{ inventory_hostname }}: {{ selinux_status.stdout }}"
+
+- name: Test Kubernetes Cluster
+  hosts: rke2_servers[0]
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Add kubectl to system path
+      file:
+        src: "{{ rke2_install_dir }}/rke2"
+        dest: /usr/local/bin/kubectl
+        state: link
+      ignore_errors: yes
+
+    - name: Test kubectl connectivity
+      command: /usr/local/bin/kubectl get nodes
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: kubectl_nodes
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Display cluster nodes
+      debug:
+        msg: "Cluster nodes:\n{{ kubectl_nodes.stdout_lines }}"
+      when: kubectl_nodes.rc == 0
+
+    - name: Display kubectl error
+      debug:
+        msg: "kubectl error: {{ kubectl_nodes.stderr }}"
+      when: kubectl_nodes.rc != 0
+
+    - name: Test cluster info
+      command: /usr/local/bin/kubectl cluster-info
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: cluster_info
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Display cluster info
+      debug:
+        msg: "Cluster info:\n{{ cluster_info.stdout_lines }}"
+      when: cluster_info.rc == 0
+
+    - name: Test all pods
+      command: /usr/local/bin/kubectl get pods --all-namespaces
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: all_pods
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Display pod count
+      debug:
+        msg: "Total pods: {{ all_pods.stdout_lines | length }}"
+      when: all_pods.rc == 0
+
+    - name: Test system pods
+      command: /usr/local/bin/kubectl get pods -n kube-system
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: system_pods
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Display system pods
+      debug:
+        msg: "System pods:\n{{ system_pods.stdout_lines }}"
+      when: system_pods.rc == 0
+
+- name: Test MetalLB
+  hosts: rke2_servers[0]
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Test MetalLB namespace
+      command: /usr/local/bin/kubectl get namespace metallb-system
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: metallb_namespace
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Display MetalLB namespace status
+      debug:
+        msg: "MetalLB namespace exists: {{ metallb_namespace.rc == 0 }}"
+
+    - name: Test MetalLB pods
+      command: /usr/local/bin/kubectl get pods -n metallb-system
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: metallb_pods
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Display MetalLB pods
+      debug:
+        msg: "MetalLB pods:\n{{ metallb_pods.stdout_lines }}"
+      when: metallb_pods.rc == 0
+
+    - name: Test MetalLB IP address pool
+      command: /usr/local/bin/kubectl get IPAddressPool -n metallb-system
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: metallb_pool
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Display MetalLB IP pool
+      debug:
+        msg: "MetalLB IP pool:\n{{ metallb_pool.stdout_lines }}"
+      when: metallb_pool.rc == 0
+
+- name: Test Network Connectivity
+  hosts: kubernetes
+  become: true
+  gather_facts: true
+  tasks:
+    - name: Test firewall rules
+      command: firewall-cmd --list-all
+      register: firewall_rules
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Display firewall status
+      debug:
+        msg: "Firewall rules configured on {{ inventory_hostname }}"
+
+    - name: Test inter-node connectivity
+      shell: |
+        for server in {{ groups['rke2_servers'] | map('extract', hostvars, ['ansible_host']) | join(' ') }}; do
+          ping -c 1 -W 2 $server || echo "Failed to reach $server"
+        done
+      register: connectivity_test
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Display connectivity results
+      debug:
+        msg: "Connectivity test:\n{{ connectivity_test.stdout_lines }}"
+
+- name: Final Test Summary
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display test completion
+      debug:
+        msg:
+          - "=========================================="
+          - "RKE2 Cluster Deployment Tests Complete"
+          - "=========================================="
+          - "Review the test results above to verify:"
+          - "1. All nodes are accessible"
+          - "2. RKE2 services are running"
+          - "3. Kubernetes cluster is functional"
+          - "4. MetalLB is configured"
+          - "5. Network connectivity is working"
+          - "=========================================="

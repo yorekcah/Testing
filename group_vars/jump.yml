@@ -1,0 +1,24 @@
+---
+# Jump Host specific variables
+
+# Jump host acts as bastion and management server
+jump_host_enable_bastion: true
+jump_host_install_kubectl: true
+jump_host_install_helm: true
+
+# SSH bastion configuration
+bastion_port: 22
+bastion_allowed_users:
+  - rhel
+  - admin
+
+# Monitoring and management tools
+jump_host_packages:
+  - htop
+  - net-tools
+  - tcpdump
+  - vim
+  - git
+  - curl
+  - wget
+  - jq

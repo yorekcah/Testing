@@ -1,0 +1,271 @@
+---
+# Network and Firewall Configuration Playbook for RHEL 9
+# This playbook configures networking and firewall rules for the RKE2 cluster
+
+- name: Configure Network and Firewall
+  hosts: kubernetes
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Update dnf cache
+      dnf:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: not airgap_enabled
+
+    - name: Install firewalld (online)
+      dnf:
+        name:
+          - firewalld
+          - haproxy
+        state: present
+      when: not airgap_enabled
+
+    - name: Install firewalld from local repo (airgap)
+      dnf:
+        name:
+          - firewalld
+          - haproxy
+        state: present
+        disablerepo: "*"
+        enablerepo: "local-repo"
+      when: airgap_enabled
+
+    - name: Start and enable firewalld
+      systemd:
+        name: firewalld
+        state: started
+        enabled: yes
+
+    - name: Allow SSH
+      firewalld:
+        service: ssh
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: Allow Kubernetes API server
+      firewalld:
+        port: 6443/tcp
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: Allow Flannel VXLAN
+      firewalld:
+        port: 8472/udp
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: Allow Kubelet API
+      firewalld:
+        port: 10250/tcp
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: Allow NodePort services
+      firewalld:
+        port: 30000-32767/tcp
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: Allow HTTP
+      firewalld:
+        service: http
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: Allow HTTPS
+      firewalld:
+        service: https
+        permanent: yes
+        state: enabled
+        immediate: yes
+
+    - name: Allow BGP (if using BGP mode)
+      firewalld:
+        port: 179/tcp
+        permanent: yes
+        state: enabled
+        immediate: yes
+      when: metallb_protocol == "bgp"
+
+    - name: Allow cluster network traffic
+      firewalld:
+        rich_rule: "rule family=ipv4 source address={{ item }} accept"
+        permanent: yes
+        state: enabled
+        immediate: yes
+      loop: "{{ groups['kubernetes'] | map('extract', hostvars, ['ansible_host']) | list }}"
+
+    - name: Configure network interfaces
+      block:
+        - name: Get network interface name
+          shell: ip route get 1 | awk '{print $5}' | head -1
+          register: network_interface
+          changed_when: false
+
+        - name: Display network interface
+          debug:
+            msg: "Primary network interface: {{ network_interface.stdout }}"
+
+        - name: Disable reverse path filtering
+          sysctl:
+            name: "net.ipv4.conf.{{ network_interface.stdout }}.rp_filter"
+            value: 0
+            state: present
+            reload: yes
+
+        - name: Enable IP forwarding
+          sysctl:
+            name: net.ipv4.ip_forward
+            value: 1
+            state: present
+            reload: yes
+
+- name: Configure Load Balancer for API Server
+  hosts: jump
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Configure HAProxy for RKE2 API server
+      copy:
+        dest: /etc/haproxy/haproxy.cfg
+        mode: '0644'
+        content: |
+          global
+              log /dev/log    local0
+              log /dev/log    local1 notice
+              chroot /var/lib/haproxy
+              stats socket /run/haproxy/admin.sock mode 660 level admin
+              stats timeout 30s
+              user haproxy
+              group haproxy
+              daemon
+
+              # Default SSL material locations
+              ca-base /etc/ssl/certs
+              crt-base /etc/ssl/private
+
+              # Default ciphers to use on SSL-enabled listening sockets
+              ssl-default-bind-ciphers ECDH+AESGCM:DH+AESGCM:ECDH+AES256:DH+AES256:ECDH+AES128:DH+AES:RSA+AESGCM:RSA+AES:!aNULL:!MD5:!DSS
+
+          defaults
+              log     global
+              mode    http
+              option  httplog
+              option  dontlognull
+              timeout connect 5000
+              timeout client  50000
+              timeout server  50000
+              errorfile 400 /etc/haproxy/errors/400.http
+              errorfile 403 /etc/haproxy/errors/403.http
+              errorfile 408 /etc/haproxy/errors/408.http
+              errorfile 500 /etc/haproxy/errors/500.http
+              errorfile 502 /etc/haproxy/errors/502.http
+              errorfile 503 /etc/haproxy/errors/503.http
+              errorfile 504 /etc/haproxy/errors/504.http
+
+          frontend rke2-api
+              bind {{ api_server_loadbalancer_ip }}:{{ api_server_port }}
+              mode tcp
+              option tcplog
+              default_backend rke2-servers
+
+          backend rke2-servers
+              mode tcp
+              balance roundrobin
+              option tcp-check
+              {% for server in groups['rke2_servers'] %}
+              server {{ hostvars[server]['inventory_hostname'] }} {{ hostvars[server]['ansible_host'] }}:{{ api_server_port }} check
+              {% endfor %}
+
+          frontend rke2-http
+              bind {{ api_server_loadbalancer_ip }}:80
+              mode tcp
+              option tcplog
+              default_backend rke2-servers-http
+
+          backend rke2-servers-http
+              mode tcp
+              balance roundrobin
+              option tcp-check
+              {% for server in groups['rke2_servers'] %}
+              server {{ hostvars[server]['inventory_hostname'] }} {{ hostvars[server]['ansible_host'] }}:80 check
+              {% endfor %}
+
+          frontend rke2-https
+              bind {{ api_server_loadbalancer_ip }}:443
+              mode tcp
+              option tcplog
+              default_backend rke2-servers-https
+
+          backend rke2-servers-https
+              mode tcp
+              balance roundrobin
+              option tcp-check
+              {% for server in groups['rke2_servers'] %}
+              server {{ hostvars[server]['inventory_hostname'] }} {{ hostvars[server]['ansible_host'] }}:443 check
+              {% endfor %}
+
+          listen stats
+              bind {{ api_server_loadbalancer_ip }}:8404
+              mode http
+              stats enable
+              stats uri /
+              stats refresh 10s
+              stats auth admin:admin
+
+    - name: Test HAProxy configuration
+      command: haproxy -c -f /etc/haproxy/haproxy.cfg
+      register: haproxy_test
+      changed_when: false
+
+    - name: Enable and start HAProxy
+      systemd:
+        name: haproxy
+        state: started
+        enabled: yes
+
+    - name: Add load balancer IP to jump host interface
+      shell: |
+        ip addr add {{ api_server_loadbalancer_ip }}/24 dev $(ip route get 1 | awk '{print $5}' | head -1) || true
+      register: lb_ip_add
+      changed_when: false
+
+    - name: Add load balancer IP to network interfaces (persistent)
+      block:
+        - name: Get network interface name
+          shell: ip route get 1 | awk '{print $5}' | head -1
+          register: network_interface
+          changed_when: false
+
+        - name: Create NetworkManager connection profile
+          copy:
+            dest: "/etc/NetworkManager/system-connections/{{ network_interface.stdout }}.nmconnection"
+            mode: '0600'
+            content: |
+              [connection]
+              id={{ network_interface.stdout }}
+              type=ethernet
+              interface-name={{ network_interface.stdout }}
+
+              [ipv4]
+              address1={{ api_server_loadbalancer_ip }}/24
+              method=auto
+
+        - name: Reload NetworkManager
+          shell: nmcli connection reload
+          notify: restart network
+
+  handlers:
+    - name: restart network
+      systemd:
+        name: NetworkManager
+        state: restarted

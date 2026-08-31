@@ -1,0 +1,267 @@
+---
+# RKE2 Agent Installation Playbook for RHEL 9 Airgap
+# This playbook installs and configures RKE2 worker nodes
+
+- name: Prepare RKE2 Agents
+  hosts: rke2_agents
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Update dnf cache
+      dnf:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: not airgap_enabled
+
+    - name: Install required packages (online)
+      dnf:
+        name:
+          - curl
+          - wget
+          - ca-certificates
+          - iptables
+          - socat
+          - conntrack-tools
+          - ipset
+          - open-vm-tools
+          - python3
+          - container-selinux
+          - selinux-policy-targeted
+          - libseccomp
+          - policycoreutils-python-utils
+        state: present
+      when: not airgap_enabled
+
+    - name: Install required packages from local repo (airgap)
+      dnf:
+        name:
+          - curl
+          - wget
+          - ca-certificates
+          - iptables
+          - socat
+          - conntrack-tools
+          - ipset
+          - open-vm-tools
+          - python3
+          - container-selinux
+          - selinux-policy-targeted
+          - libseccomp
+          - policycoreutils-python-utils
+        state: present
+        disablerepo: "*"
+        enablerepo: "local-repo"
+      when: airgap_enabled
+
+    - name: Set system timezone
+      timezone:
+        name: "{{ system_timezone }}"
+
+    - name: Configure chrony (online)
+      dnf:
+        name: chrony
+        state: present
+      when: not airgap_enabled
+
+    - name: Configure chrony from local repo (airgap)
+      dnf:
+        name: chrony
+        state: present
+        disablerepo: "*"
+        enablerepo: "local-repo"
+      when: airgap_enabled
+
+    - name: Configure chrony NTP servers
+      lineinfile:
+        path: /etc/chrony.conf
+        regexp: '^pool '
+        line: "pool {{ item }} iburst"
+        create: yes
+      loop: "{{ ntp_servers }}"
+      notify: restart chrony
+
+    - name: Disable swap
+      command: swapoff -a
+      ignore_errors: yes
+
+    - name: Remove swap from fstab
+      lineinfile:
+        path: /etc/fstab
+        regexp: '.*swap.*'
+        state: absent
+
+    - name: Load kernel modules
+      modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - overlay
+        - br_netfilter
+
+    - name: Add kernel modules to modules-load
+      copy:
+        dest: "/etc/modules-load.d/{{ item }}.conf"
+        content: "{{ item }}"
+      loop:
+        - overlay
+        - br_netfilter
+
+    - name: Configure sysctl for Kubernetes
+      sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        state: present
+        reload: yes
+      loop:
+        - { name: net.bridge.bridge-nf-call-iptables, value: 1 }
+        - { name: net.bridge.bridge-nf-call-ip6tables, value: 1 }
+        - { name: net.ipv4.ip_forward, value: 1 }
+
+    - name: Configure SELinux for container runtime
+      selinux:
+        policy: targeted
+        state: permissive
+      when: ansible_selinux.status == "enabled"
+
+    - name: Set SELinux context for container runtime directories
+      sefcontext:
+        target: "{{ item }}"
+        setype: container_file_t
+        state: present
+      loop:
+        - "/var/lib/rancher/rke2(/.*)?"
+        - "/etc/rancher/rke2(/.*)?"
+        - "/var/lib/kubelet(/.*)?"
+      when: ansible_selinux.status == "enabled"
+
+    - name: Apply SELinux context changes
+      command: restorecon -Rv /var/lib/rancher/rke2 /etc/rancher/rke2 /var/lib/kubelet
+      when: ansible_selinux.status == "enabled"
+      ignore_errors: yes
+
+    - name: Create RKE2 config directory
+      file:
+        path: "{{ rke2_config_dir }}"
+        state: directory
+        mode: '0755'
+
+    - name: Get RKE2 server token from first server
+      slurp:
+        src: "{{ rke2_config_dir }}/rke2-token"
+      register: rke2_token
+      delegate_to: server-1
+      run_once: true
+
+    - name: Set fact for RKE2 token
+      set_fact:
+        rke2_cluster_token: "{{ rke2_token.content | b64decode }}"
+      run_once: true
+
+    - name: Copy RKE2 token to agents
+      copy:
+        content: "{{ rke2_cluster_token }}"
+        dest: "{{ rke2_config_dir }}/rke2-token"
+        mode: '0600'
+
+    - name: Configure RKE2 agent config
+      copy:
+        dest: "{{ rke2_config_dir }}/config.yaml"
+        content: |
+          {% for key, value in rke2_agent_config.items() %}
+          {{ key }}: {{ value }}
+          {% endfor %}
+        mode: '0644'
+
+    - name: Download RKE2 install script (online)
+      get_url:
+        url: https://get.rke2.io
+        dest: /tmp/rke2-install.sh
+        mode: '0755'
+      register: rke2_script
+      until: rke2_script is succeeded
+      retries: 3
+      delay: 5
+      when: not airgap_enabled
+
+    - name: Copy RKE2 install script from local binaries (airgap)
+      copy:
+        src: "{{ airgap_rke2_binary_path }}/rke2-install.sh"
+        dest: /tmp/rke2-install.sh
+        mode: '0755'
+      when: airgap_enabled
+
+    - name: Install RKE2 agent (online)
+      shell: |
+        INSTALL_RKE2_VERSION="{{ rke2_version }}" INSTALL_RKE2_CHANNEL=stable INSTALL_RKE2_TYPE="agent" sh /tmp/rke2-install.sh
+      args:
+        creates: "{{ rke2_install_dir }}/rke2"
+      environment:
+        INSTALL_RKE2_VERSION: "{{ rke2_version }}"
+        INSTALL_RKE2_CHANNEL: stable
+        INSTALL_RKE2_TYPE: agent
+      when: not airgap_enabled
+
+    - name: Install RKE2 agent from local binaries (airgap)
+      shell: |
+        INSTALL_RKE2_VERSION="{{ rke2_version }}" INSTALL_RKE2_CHANNEL=stable INSTALL_RKE2_TYPE="agent" INSTALL_RKE2_ARTIFACT_PATH="{{ airgap_rke2_binary_path }}" sh /tmp/rke2-install.sh
+      args:
+        creates: "{{ rke2_install_dir }}/rke2"
+      environment:
+        INSTALL_RKE2_VERSION: "{{ rke2_version }}"
+        INSTALL_RKE2_CHANNEL: stable
+        INSTALL_RKE2_TYPE: agent
+        INSTALL_RKE2_ARTIFACT_PATH: "{{ airgap_rke2_binary_path }}"
+      when: airgap_enabled
+
+    - name: Copy RKE2 airgap images to agent nodes
+      synchronize:
+        src: "{{ airgap_container_images_path }}/"
+        dest: "{{ rke2_data_dir }}/agent/images/"
+        delete: yes
+      when: airgap_enabled
+      delegate_to: "{{ item }}"
+      loop: "{{ groups['rke2_agents'] }}"
+
+    - name: Enable and start RKE2 agent
+      systemd:
+        name: rke2-agent
+        state: started
+        enabled: yes
+
+    - name: Wait for RKE2 agent to join cluster
+      wait_for:
+        timeout: 60
+      delegate_to: server-1
+      run_once: true
+
+    - name: Wait for agent nodes to be ready
+      shell: "{{ rke2_install_dir }}/rke2 kubectl get nodes -o json"
+      register: nodes_status
+      until: nodes_status.rc == 0
+      retries: 30
+      delay: 10
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      delegate_to: server-1
+      run_once: true
+
+    - name: Verify agent nodes are Ready
+      shell: "{{ rke2_install_dir }}/rke2 kubectl get nodes --no-headers | grep -v NotReady | wc -l"
+      register: ready_nodes
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      delegate_to: server-1
+      run_once: true
+
+    - name: Display ready nodes count
+      debug:
+        msg: "Ready nodes: {{ ready_nodes.stdout }}"
+      delegate_to: server-1
+      run_once: true
+
+  handlers:
+    - name: restart chrony
+      systemd:
+        name: chronyd
+        state: restarted

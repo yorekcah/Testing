@@ -1,0 +1,181 @@
+---
+# Main site playbook for RKE2 Kubernetes cluster with MetalLB
+# This orchestrates the entire deployment process for RHEL 9 airgap
+
+- name: Deploy RKE2 Kubernetes Cluster with MetalLB
+  hosts: localhost
+  gather_facts: false
+  tasks:
+    - name: Display deployment information
+      debug:
+        msg:
+          - "Deploying RKE2 Kubernetes Cluster with MetalLB"
+          - "Architecture: 1 Jump Host, 3 RKE2 Servers, 3 RKE2 Agents"
+          - "OS: RHEL {{ os_version }}"
+          - "Airgap Mode: {{ airgap_enabled }}"
+          - "RKE2 Version: {{ rke2_version }}"
+          - "MetalLB Version: {{ metallb_version }}"
+          - "IP Range: {{ metallb_ip_range }}"
+
+- name: Step 1: Configure Jump Host
+  import_playbook: jump-host-setup.yml
+
+- name: Step 2: Configure Network and Firewall
+  import_playbook: network-firewall-setup.yml
+
+- name: Step 3: Install RKE2 Servers
+  import_playbook: rke2-server-setup.yml
+
+- name: Step 4: Install RKE2 Agents
+  import_playbook: rke2-agent-setup.yml
+
+- name: Step 5: Install and Configure MetalLB
+  import_playbook: metallb-setup.yml
+
+- name: Step 6: Install Additional Add-ons (Optional)
+  import_playbook: add-ons-setup.yml
+  when: install_harbor or install_longhorn or install_velero or install_gitea
+
+- name: Step 7: Final Verification
+  hosts: rke2_servers[0]
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Verify cluster status
+      block:
+        - name: Add kubectl to system path
+          file:
+            src: "{{ rke2_install_dir }}/rke2"
+            dest: /usr/local/bin/kubectl
+            state: link
+
+        - name: Get cluster nodes
+          shell: |
+            /usr/local/bin/kubectl get nodes -o wide
+          environment:
+            KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+          register: cluster_nodes
+          changed_when: false
+
+        - name: Display cluster nodes
+          debug:
+            msg: "{{ cluster_nodes.stdout_lines }}"
+
+        - name: Get cluster info
+          shell: |
+            /usr/local/bin/kubectl cluster-info
+          environment:
+            KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+          register: cluster_info
+          changed_when: false
+
+        - name: Display cluster info
+          debug:
+            msg: "{{ cluster_info.stdout_lines }}"
+
+        - name: Get all pods
+          shell: |
+            /usr/local/bin/kubectl get pods --all-namespaces
+          environment:
+            KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+          register: all_pods
+          changed_when: false
+
+        - name: Display all pods
+          debug:
+            msg: "{{ all_pods.stdout_lines }}"
+
+        - name: Verify MetalLB
+          shell: |
+            /usr/local/bin/kubectl get all -n metallb-system
+          environment:
+            KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+          register: metallb_status
+          changed_when: false
+
+        - name: Display MetalLB status
+          debug:
+            msg: "{{ metallb_status.stdout_lines }}"
+
+        - name: Verify Harbor installation
+          shell: |
+            /usr/local/bin/kubectl get all -n harbor
+          environment:
+            KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+          register: harbor_status
+          changed_when: false
+          when: install_harbor
+
+        - name: Display Harbor status
+          debug:
+            msg: "{{ harbor_status.stdout_lines }}"
+          when: install_harbor
+
+        - name: Verify Longhorn installation
+          shell: |
+            /usr/local/bin/kubectl get all -n longhorn-system
+          environment:
+            KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+          register: longhorn_status
+          changed_when: false
+          when: install_longhorn
+
+        - name: Display Longhorn status
+          debug:
+            msg: "{{ longhorn_status.stdout_lines }}"
+          when: install_longhorn
+
+        - name: Verify Velero installation
+          shell: |
+            /usr/local/bin/kubectl get all -n velero
+          environment:
+            KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+          register: velero_status
+          changed_when: false
+          when: install_velero
+
+        - name: Display Velero status
+          debug:
+            msg: "{{ velero_status.stdout_lines }}"
+          when: install_velero
+
+        - name: Verify Gitea installation
+          shell: |
+            /usr/local/bin/kubectl get all -n gitea
+          environment:
+            KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+          register: gitea_status
+          changed_when: false
+          when: install_gitea
+
+        - name: Display Gitea status
+          debug:
+            msg: "{{ gitea_status.stdout_lines }}"
+          when: install_gitea
+
+        - name: Display deployment completion message
+          debug:
+            msg:
+              - "=========================================="
+              - "RKE2 Kubernetes Cluster Deployment Complete!"
+              - "=========================================="
+              - "OS: RHEL {{ os_version }}"
+              - "Airgap Mode: {{ airgap_enabled }}"
+              - "To access the cluster from the jump host:"
+              - "  1. SSH to the jump host"
+              - "  2. Run: /opt/scripts/kube-config.sh"
+              - "  3. Use kubectl to manage the cluster"
+              - ""
+              - "Cluster nodes: {{ cluster_nodes.stdout_lines }}"
+              - ""
+              - "MetalLB IP Range: {{ metallb_ip_range }}"
+              - "Load Balancer IP: {{ api_server_loadbalancer_ip }}"
+              - ""
+              - "Installed Add-ons:"
+              - "  - MetalLB: {{ metallb_version }}"
+              - "  - Harbor: {{ harbor_version if install_harbor else 'Not installed' }}"
+              - "  - Longhorn: {{ longhorn_version if install_longhorn else 'Not installed' }}"
+              - "  - Velero: {{ velero_version if install_velero else 'Not installed' }}"
+              - "  - Gitea: {{ gitea_version if install_gitea else 'Not installed' }}"
+              - "=========================================="

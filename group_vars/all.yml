@@ -1,0 +1,70 @@
+---
+# Common variables for RKE2 and MetalLB deployment
+
+# OS Configuration
+os_family: "RedHat"
+os_distribution: "RedHat"
+os_version: "9"
+
+# Airgap Configuration
+airgap_enabled: true
+airgap_local_repo_path: "/opt/local-repo"
+airgap_container_images_path: "/opt/container-images"
+airgap_rke2_binary_path: "/opt/rke2-airgap"
+airgap_addons_path: "/opt/add-ons-airgap"
+
+# RKE2 Configuration
+rke2_version: "v1.28.10+rke2r1"
+rke2_install_dir: "/usr/local/bin"
+rke2_config_dir: "/etc/rancher/rke2"
+rke2_data_dir: "/var/lib/rancher/rke2"
+
+# Network Configuration
+pod_cidr: "10.42.0.0/16"
+service_cidr: "10.43.0.0/16"
+cluster_domain: "cluster.local"
+
+# MetalLB Configuration
+metallb_version: "v0.14.0"
+metallb_ip_range: "192.168.1.200-192.168.1.250"
+metallb_protocol: "layer2"
+
+# Load Balancer Configuration
+api_server_port: 6443
+api_server_loadbalancer_ip: "192.168.1.199"
+
+# Add-on Versions
+helm_version: "v3.14.0"
+harbor_version: "v2.10.0"
+longhorn_version: "v1.6.0"
+velero_version: "v1.13.0"
+gitea_version: "v1.21.0"
+
+# Add-on Installation Flags
+install_harbor: false
+install_longhorn: false
+install_velero: false
+install_gitea: false
+
+# Firewall Ports
+firewall_ports:
+  - 22/tcp    # SSH
+  - 6443/tcp  # Kubernetes API
+  - 8472/udp  # Flannel VXLAN
+  - 10250/tcp # Kubelet
+  - 179/tcp   # BGP (if using BGP mode)
+  - 80/tcp    # HTTP
+  - 443/tcp   # HTTPS
+
+# System Configuration
+system_timezone: "UTC"
+ntp_servers:
+  - "time.google.com"
+  - "pool.ntp.org"
+
+# RHEL 9 Specific
+rhel_subscription_enabled: false
+rhel_subscription_username: ""
+rhel_subscription_password: ""
+rhel_local_repo_enabled: true
+selinux_state: permissive

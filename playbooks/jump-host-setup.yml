@@ -1,0 +1,276 @@
+---
+# Jump Host Setup Playbook for RHEL 9 Airgap
+# This playbook configures the jump host as a bastion and management server
+
+- name: Configure Jump Host
+  hosts: jump
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Update dnf cache
+      dnf:
+        update_cache: yes
+        cache_valid_time: 3600
+      when: not airgap_enabled
+
+    - name: Install system packages
+      dnf:
+        name:
+          - htop
+          - net-tools
+          - tcpdump
+          - vim
+          - git
+          - curl
+          - wget
+          - jq
+          - unzip
+          - python3
+          - python3-pip
+          - firewalld
+        state: present
+      when: not airgap_enabled
+
+    - name: Install system packages from local repo (airgap)
+      dnf:
+        name:
+          - htop
+          - net-tools
+          - tcpdump
+          - vim
+          - git
+          - curl
+          - wget
+          - jq
+          - unzip
+          - python3
+          - python3-pip
+          - firewalld
+        state: present
+        disablerepo: "*"
+        enablerepo: "local-repo"
+      when: airgap_enabled
+
+    - name: Set system timezone
+      timezone:
+        name: "{{ system_timezone }}"
+
+    - name: Configure chrony
+      dnf:
+        name: chrony
+        state: present
+      when: not airgap_enabled
+
+    - name: Configure chrony from local repo (airgap)
+      dnf:
+        name: chrony
+        state: present
+        disablerepo: "*"
+        enablerepo: "local-repo"
+      when: airgap_enabled
+
+    - name: Configure chrony NTP servers
+      lineinfile:
+        path: /etc/chrony.conf
+        regexp: '^pool '
+        line: "pool {{ item }} iburst"
+        create: yes
+      loop: "{{ ntp_servers }}"
+      notify: restart chrony
+
+    - name: Install kubectl (online)
+      get_url:
+        url: "https://dl.k8s.io/release/$(curl -L -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+        dest: /usr/local/bin/kubectl
+        mode: '0755'
+      register: kubectl_download
+      until: kubectl_download is succeeded
+      retries: 3
+      delay: 5
+      when: not airgap_enabled
+
+    - name: Install kubectl from local binaries (airgap)
+      copy:
+        src: "{{ airgap_rke2_binary_path }}/kubectl"
+        dest: /usr/local/bin/kubectl
+        mode: '0755'
+      when: airgap_enabled
+
+    - name: Verify kubectl installation
+      command: kubectl version --client
+      register: kubectl_version
+      changed_when: false
+
+    - name: Display kubectl version
+      debug:
+        msg: "kubectl version: {{ kubectl_version.stdout }}"
+
+    - name: Install Helm (online)
+      shell: |
+        curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+        chmod +x get_helm.sh
+        ./get_helm.sh
+        rm get_helm.sh
+      args:
+        creates: /usr/local/bin/helm
+      register: helm_install
+      until: helm_install is succeeded
+      retries: 3
+      delay: 5
+      when: not airgap_enabled
+
+    - name: Install Helm from local binaries (airgap)
+      copy:
+        src: "{{ airgap_rke2_binary_path }}/helm"
+        dest: /usr/local/bin/helm
+        mode: '0755'
+      when: airgap_enabled
+
+    - name: Verify Helm installation
+      command: helm version
+      register: helm_version
+      changed_when: false
+
+    - name: Display Helm version
+      debug:
+        msg: "Helm version: {{ helm_version.stdout }}"
+
+    - name: Create .kube directory for ansible user
+      file:
+        path: "/home/{{ ansible_user }}/.kube"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: '0755'
+
+    - name: Configure SSH bastion settings
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: "{{ item.regexp }}"
+        line: "{{ item.line }}"
+        state: present
+      loop:
+        - { regexp: '^PermitRootLogin', line: 'PermitRootLogin no' }
+        - { regexp: '^PasswordAuthentication', line: 'PasswordAuthentication no' }
+        - { regexp: '^PubkeyAuthentication', line: 'PubkeyAuthentication yes' }
+      notify: restart sshd
+
+    - name: Configure SELinux for SSH
+      seboolean:
+        name: sshd_permit_root_login
+        state: no
+        persistent: yes
+      when: ansible_selinux.status == "enabled"
+
+    - name: Create scripts directory
+      file:
+        path: /opt/scripts
+        state: directory
+        mode: '0755'
+
+    - name: Create cluster management script
+      copy:
+        dest: /opt/scripts/kube-config.sh
+        mode: '0755'
+        content: |
+          #!/bin/bash
+          # Script to copy kubeconfig from first RKE2 server
+          SERVER_IP="{{ hostvars['server-1']['ansible_host'] }}"
+          ssh {{ ansible_user }}@$SERVER_IP "sudo cat /etc/rancher/rke2/rke2.yaml" > ~/.kube/config
+          chmod 600 ~/.kube/config
+          echo "Kubeconfig copied successfully"
+
+    - name: Setup monitoring tools (online)
+      dnf:
+        name:
+          - node_exporter
+        state: present
+      when: not airgap_enabled
+
+    - name: Setup monitoring tools from local repo (airgap)
+      dnf:
+        name:
+          - node_exporter
+        state: present
+        disablerepo: "*"
+        enablerepo: "local-repo"
+      when: airgap_enabled
+
+    - name: Create node_exporter systemd service
+      copy:
+        dest: /etc/systemd/system/node_exporter.service
+        mode: '0644'
+        content: |
+          [Unit]
+          Description=Node Exporter
+          After=network.target
+
+          [Service]
+          Type=simple
+          User=node_exporter
+          ExecStart=/usr/bin/node_exporter
+          Restart=always
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Create node_exporter user
+      user:
+        name: node_exporter
+        system: yes
+        shell: /bin/false
+
+    - name: Start and enable node_exporter
+      systemd:
+        name: node_exporter
+        state: started
+        enabled: yes
+        daemon_reload: yes
+
+    - name: Configure firewalld
+      block:
+        - name: Start and enable firewalld
+          systemd:
+            name: firewalld
+            state: started
+            enabled: yes
+
+        - name: Allow SSH
+          firewalld:
+            service: ssh
+            permanent: yes
+            state: enabled
+            immediate: yes
+
+        - name: Allow HTTP
+          firewalld:
+            service: http
+            permanent: yes
+            state: enabled
+            immediate: yes
+
+        - name: Allow HTTPS
+          firewalld:
+            service: https
+            permanent: yes
+            state: enabled
+            immediate: yes
+
+        - name: Allow Node Exporter
+          firewalld:
+            port: 9100/tcp
+            permanent: yes
+            state: enabled
+            immediate: yes
+
+  handlers:
+    - name: restart chrony
+      systemd:
+        name: chronyd
+        state: restarted
+
+    - name: restart sshd
+      systemd:
+        name: sshd
+        state: restarted

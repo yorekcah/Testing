@@ -1,0 +1,37 @@
+# Ansible Inventory for RKE2 Kubernetes Cluster with MetalLB
+# Architecture: 1 Jump Host, 3 RKE2 Servers, 3 RKE2 Agents
+# Copy this file to hosts.ini and replace the placeholder IPs
+
+[all:vars]
+ansible_user=rhel
+ansible_ssh_private_key_file=~/.ssh/id_rsa
+ansible_python_interpreter=/usr/bin/python3
+ansible_os_family=RedHat
+ansible_distribution_version=9
+
+# Jump Host
+[jump]
+jump-server ansible_host=192.168.1.10 ansible_port=22
+
+# RKE2 Control Plane Servers (etcd + control plane)
+[rke2_servers]
+server-1 ansible_host=192.168.1.11 ansible_port=22
+server-2 ansible_host=192.168.1.12 ansible_port=22
+server-3 ansible_host=192.168.1.13 ansible_port=22
+
+# RKE2 Agent Nodes (workers)
+[rke2_agents]
+agent-1 ansible_host=192.168.1.14 ansible_port=22
+agent-2 ansible_host=192.168.1.15 ansible_port=22
+agent-3 ansible_host=192.168.1.16 ansible_port=22
+
+# Groups for convenience
+[kubernetes:children]
+rke2_servers
+rke2_agents
+
+[control_plane:children]
+rke2_servers
+
+[workers:children]
+rke2_agents

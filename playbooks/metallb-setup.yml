@@ -1,0 +1,254 @@
+---
+# MetalLB Installation and Configuration Playbook
+# This playbook installs MetalLB for load balancing in the RKE2 cluster
+
+- name: Install and Configure MetalLB
+  hosts: rke2_servers[0]
+  become: true
+  gather_facts: true
+
+  tasks:
+    - name: Verify RKE2 is running
+      systemd:
+        name: rke2-server
+        state: started
+
+    - name: Add kubectl to system path
+      file:
+        src: "{{ rke2_install_dir }}/rke2"
+        dest: /usr/local/bin/kubectl
+        state: link
+
+    - name: Create MetalLB namespace
+      shell: |
+        /usr/local/bin/kubectl create namespace metallb-system --dry-run=client -o yaml | /usr/local/bin/kubectl apply -f -
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: metallb_namespace
+      changed_when: false
+
+    - name: Create MetalLB manifests directory
+      file:
+        path: /tmp/metallb
+        state: directory
+        mode: '0755'
+
+    - name: Download MetalLB manifest
+      get_url:
+        url: "https://raw.githubusercontent.com/metallb/metallb/{{ metallb_version }}/config/manifests/metallb-native.yaml"
+        dest: /tmp/metallb/metallb-native.yaml
+        mode: '0644'
+      register: metallb_manifest
+      until: metallb_manifest is succeeded
+      retries: 3
+      delay: 5
+
+    - name: Apply MetalLB manifest
+      shell: |
+        /usr/local/bin/kubectl apply -f /tmp/metallb/metallb-native.yaml
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: metallb_install
+      until: metallb_install.rc == 0
+      retries: 5
+      delay: 10
+
+    - name: Wait for MetalLB pods to be ready
+      shell: |
+        /usr/local/bin/kubectl wait --namespace metallb-system \
+          --for=condition=ready pod \
+          --selector=app=metallb \
+          --timeout=300s
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: metallb_ready
+      until: metallb_ready.rc == 0
+      retries: 10
+      delay: 30
+
+    - name: Create MetalLB IP address pool configuration
+      copy:
+        dest: /tmp/metallb/ipaddresspool.yaml
+        mode: '0644'
+        content: |
+          apiVersion: metallb.io/v1beta1
+          kind: IPAddressPool
+          metadata:
+            name: default-pool
+            namespace: metallb-system
+          spec:
+            addresses:
+              - {{ metallb_ip_range }}
+            autoAssign: true
+
+    - name: Create MetalLB L2 advertisement configuration
+      copy:
+        dest: /tmp/metallb/l2advertisement.yaml
+        mode: '0644'
+        content: |
+          apiVersion: metallb.io/v1beta1
+          kind: L2Advertisement
+          metadata:
+            name: default
+            namespace: metallb-system
+          spec:
+            ipAddressPools:
+              - default-pool
+
+    - name: Apply MetalLB IP address pool
+      shell: |
+        /usr/local/bin/kubectl apply -f /tmp/metallb/ipaddresspool.yaml
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: ip_pool_apply
+      until: ip_pool_apply.rc == 0
+      retries: 3
+      delay: 5
+
+    - name: Apply MetalLB L2 advertisement
+      shell: |
+        /usr/local/bin/kubectl apply -f /tmp/metallb/l2advertisement.yaml
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: l2_adv_apply
+      until: l2_adv_apply.rc == 0
+      retries: 3
+      delay: 5
+
+    - name: Verify MetalLB installation
+      shell: |
+        /usr/local/bin/kubectl get all -n metallb-system
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: metallb_status
+      changed_when: false
+
+    - name: Display MetalLB status
+      debug:
+        msg: "{{ metallb_status.stdout_lines }}"
+
+    - name: Verify IP address pool
+      shell: |
+        /usr/local/bin/kubectl get IPAddressPool -n metallb-system
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: ip_pool_status
+      changed_when: false
+
+    - name: Display IP address pool status
+      debug:
+        msg: "{{ ip_pool_status.stdout_lines }}"
+
+    - name: Create test deployment for MetalLB
+      copy:
+        dest: /tmp/metallb/test-deployment.yaml
+        mode: '0644'
+        content: |
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: nginx-test
+            namespace: default
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: nginx
+            template:
+              metadata:
+                labels:
+                  app: nginx
+              spec:
+                containers:
+                - name: nginx
+                  image: nginx:latest
+                  ports:
+                  - containerPort: 80
+          ---
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: nginx-test-svc
+            namespace: default
+          spec:
+            selector:
+              app: nginx
+            ports:
+            - port: 80
+              targetPort: 80
+            type: LoadBalancer
+
+    - name: Apply test deployment (optional)
+      shell: |
+        /usr/local/bin/kubectl apply -f /tmp/metallb/test-deployment.yaml
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: test_deploy
+      when: metallb_test_deployment | default(false)
+      ignore_errors: yes
+
+    - name: Clean up test deployment if requested
+      shell: |
+        /usr/local/bin/kubectl delete -f /tmp/metallb/test-deployment.yaml
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      when: metallb_cleanup_test | default(false)
+      ignore_errors: yes
+
+- name: Configure BGP (Optional)
+  hosts: rke2_servers[0]
+  become: true
+  gather_facts: true
+  when: metallb_protocol == "bgp"
+
+  tasks:
+    - name: Create BGP peer configuration
+      copy:
+        dest: /tmp/metallb/bgppeer.yaml
+        mode: '0644'
+        content: |
+          apiVersion: metallb.io/v1beta1
+          kind: BGPPeer
+          metadata:
+            name: bgp-peer
+            namespace: metallb-system
+          spec:
+            peerAddress: {{ metallb_bgp_peer_address }}
+            peerASN: {{ metallb_bgp_peer_asn }}
+            myASN: {{ metallb_bgp_local_asn }}
+            routerID: {{ metallb_bgp_router_id }}
+
+    - name: Apply BGP peer configuration
+      shell: |
+        /usr/local/bin/kubectl apply -f /tmp/metallb/bgppeer.yaml
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: bgp_apply
+      until: bgp_apply.rc == 0
+      retries: 3
+      delay: 5
+
+    - name: Create BGP advertisement configuration
+      copy:
+        dest: /tmp/metallb/bgpadvertisement.yaml
+        mode: '0644'
+        content: |
+          apiVersion: metallb.io/v1beta1
+          kind: BGPAdvertisement
+          metadata:
+            name: bgp-adv
+            namespace: metallb-system
+          spec:
+            ipAddressPools:
+              - default-pool
+            aggregationLength: 32
+
+    - name: Apply BGP advertisement
+      shell: |
+        /usr/local/bin/kubectl apply -f /tmp/metallb/bgpadvertisement.yaml
+      environment:
+        KUBECONFIG: "{{ rke2_config_dir }}/rke2.yaml"
+      register: bgp_adv_apply
+      until: bgp_adv_apply.rc == 0
+      retries: 3
+      delay: 5

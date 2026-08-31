@@ -1,0 +1,27 @@
+---
+# RKE2 Server Control Plane Variables
+
+# RKE2 Server Configuration
+rke2_server_config:
+  cluster-cidr: "{{ pod_cidr }}"
+  service-cidr: "{{ service_cidr }}"
+  cluster-dns: "10.43.0.10"
+  cluster-domain: "{{ cluster_domain }}"
+  tls-san:
+    - "{{ api_server_loadbalancer_ip }}"
+    - "kubernetes.default"
+    - "kubernetes.default.svc"
+    - "kubernetes.default.svc.{{ cluster_domain }}"
+  write-kubeconfig-mode: "0644"
+  etcd-expose-metrics: true
+  node-name: "{{ inventory_hostname }}"
+  selinux: true
+
+# First server initialization
+rke2_init_server: "{{ inventory_hostname == 'server-1' }}"
+
+# Server specific packages
+server_packages:
+  - curl
+  - wget
+  - ca-certificates
