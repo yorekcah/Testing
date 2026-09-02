@@ -1,0 +1,45 @@
+---
+- name: Ensure kubeconfig directory exists
+  ansible.builtin.file:
+    path: "{{ ansible_env.HOME }}/.kube"
+    state: directory
+    mode: '0700'
+
+- name: Install kubectl from local artifact
+  ansible.builtin.copy:
+    src: "{{ local_artifacts_dir }}/kubectl"
+    dest: /usr/local/bin/kubectl
+    mode: '0755'
+    remote_src: yes
+  become: yes
+  when: offline_install | bool
+
+- name: Install kubectl online
+  ansible.builtin.get_url:
+    url: "https://dl.k8s.io/release/{{ rke2_version.split('+')[0] }}/bin/linux/amd64/kubectl"
+    dest: /usr/local/bin/kubectl
+    mode: '0755'
+  become: yes
+  when: not offline_install | bool
+
+- name: Install Helm from local artifact
+  ansible.builtin.unarchive:
+    src: "{{ local_artifacts_dir }}/helm-linux-amd64.tar.gz"
+    dest: /usr/local/bin
+    remote_src: yes
+    extra_opts: [--strip-components=1]
+  become: yes
+  when: offline_install | bool
+
+- name: Install Helm online
+  ansible.builtin.shell: |
+    curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+  become: yes
+  when: not offline_install | bool
+
+- name: Verify Helm and kubectl
+  ansible.builtin.command: "{{ item }}"
+  changed_when: false
+  loop:
+    - helm version --short
+    - kubectl version --client=true --output=yaml

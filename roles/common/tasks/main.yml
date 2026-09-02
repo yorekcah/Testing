@@ -1,0 +1,170 @@
+---
+- name: Require RHEL 9
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.distribution == "RedHat"
+      - ansible_facts.distribution_major_version == "9"
+    fail_msg: "This package targets RHEL 9."
+
+- name: Create local artifact directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    mode: '0755'
+  loop:
+    - "{{ local_artifacts_dir }}"
+    - "{{ local_charts_dir }}"
+    - "{{ local_images_dir }}"
+    - "{{ local_rpm_dir }}"
+    - "{{ local_collection_dir }}"
+
+- name: Stage RKE2 artifacts on cluster nodes
+  ansible.builtin.copy:
+    src: "{{ local_artifacts_dir }}/"
+    dest: "{{ local_artifacts_dir }}/"
+    mode: preserve
+  when: inventory_hostname in groups['rke2_cluster']
+
+- name: Stage bootstrap images on cluster nodes
+  ansible.builtin.copy:
+    src: "{{ local_images_dir }}/bootstrap-images.tar"
+    dest: "{{ local_images_dir }}/bootstrap-images.tar"
+    mode: '0644'
+  when: inventory_hostname in groups['rke2_cluster']
+
+- name: Stage bootstrap image manifest on cluster nodes
+  ansible.builtin.copy:
+    src: "{{ local_images_dir }}/images.txt"
+    dest: "{{ local_images_dir }}/images.txt"
+    mode: '0644'
+  when:
+    - inventory_hostname in groups['rke2_cluster']
+    - import_bootstrap_images | bool
+
+- name: Stage RPM dependency bundle on cluster nodes
+  ansible.builtin.copy:
+    src: "{{ local_rpm_dir }}/"
+    dest: "{{ local_rpm_dir }}/"
+    mode: preserve
+  when: inventory_hostname in groups['rke2_cluster']
+
+- name: Install staged RPM dependency bundle
+  ansible.builtin.shell: |
+    set -euo pipefail
+    shopt -s nullglob
+    rpms=("{{ local_rpm_dir }}"/*.rpm)
+    if (( ${#rpms[@]} == 0 )); then
+      echo "No staged RPMs found in {{ local_rpm_dir }}" >&2
+      exit 1
+    fi
+    dnf -y --disablerepo='*' install "${rpms[@]}"
+  args:
+    executable: /bin/bash
+  when: inventory_hostname in groups['rke2_cluster']
+
+- name: Load iSCSI TCP module
+  ansible.builtin.command: modprobe iscsi_tcp
+  changed_when: false
+  when: inventory_hostname in groups['rke2_cluster']
+
+- name: Enable iSCSI daemon
+  ansible.builtin.service:
+    name: iscsid
+    state: started
+    enabled: yes
+  when: inventory_hostname in groups['rke2_cluster']
+
+- name: Ensure firewalld is running
+  ansible.builtin.service:
+    name: firewalld
+    state: started
+    enabled: yes
+
+- name: Open required cluster ports
+  ansible.posix.firewalld:
+    port: "{{ item }}"
+    permanent: yes
+    state: enabled
+    immediate: yes
+    zone: public
+  loop:
+    - 6443/tcp
+    - 10250/tcp
+    - 2379/tcp
+    - 2380/tcp
+    - 9345/tcp
+    - 8472/udp
+    - 4789/udp
+    - 51820/udp
+    - 51821/udp
+    - 5001/tcp
+    - 443/tcp
+    - 80/tcp
+
+- name: Enable IP forwarding
+  ansible.posix.sysctl:
+    name: net.ipv4.ip_forward
+    value: '1'
+    sysctl_set: yes
+    state: present
+    reload: yes
+
+- name: Disable swap
+  ansible.builtin.command: swapoff -a
+  changed_when: true
+  failed_when: false
+
+- name: Remove swap entries from fstab
+  ansible.builtin.lineinfile:
+    path: /etc/fstab
+    regexp: '^\s*[^#].*\sswap\s'
+    state: absent
+
+- name: Ensure RKE2 directories exist
+  ansible.builtin.file:
+    path: /etc/rancher/rke2
+    state: directory
+    mode: '0755'
+
+- name: Install local CA certificate
+  ansible.builtin.copy:
+    src: "{{ local_ca_cert }}"
+    dest: /etc/pki/ca-trust/source/anchors/airgap-ca.crt
+    mode: '0644'
+  when: trust_local_ca | bool
+  notify: update ca trust
+
+- name: Configure RKE2 registry mirrors
+  ansible.builtin.template:
+    src: registries.yaml.j2
+    dest: /etc/rancher/rke2/registries.yaml
+    mode: '0644'
+
+- name: Set SELinux state
+  ansible.posix.selinux:
+    policy: targeted
+    state: "{{ selinux_state }}"
+
+- name: Ensure chronyd is running
+  ansible.builtin.service:
+    name: chronyd
+    state: started
+    enabled: yes
+
+- name: Add all cluster hosts to /etc/hosts
+  ansible.builtin.lineinfile:
+    path: /etc/hosts
+    line: "{{ hostvars[item]['ansible_host'] }} {{ item }} {{ item.split('.')[0] }}"
+    state: present
+  loop: "{{ groups['rke2_servers'] + groups['rke2_agents'] + groups['jump'] }}"
+
+- name: Add service DNS names to /etc/hosts using configured VIPs
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} ANSIBLE AIRGAP SERVICES"
+    block: |
+      {{ harbor_vip }} {{ harbor_domain }}
+      {{ traefik_vip }} {{ gitea_domain }}
+
+- name: Flush CA trust handlers
+  ansible.builtin.meta: flush_handlers

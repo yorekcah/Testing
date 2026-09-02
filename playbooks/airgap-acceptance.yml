@@ -1,0 +1,42 @@
+---
+- name: Air-gap acceptance tests
+  hosts: jump
+  become: no
+  gather_facts: yes
+  tasks:
+    - name: Require Kubernetes nodes ready
+      ansible.builtin.command: kubectl wait --for=condition=Ready nodes --all --timeout=300s
+      environment:
+        KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+      changed_when: false
+    - name: Verify Harbor API
+      ansible.builtin.uri:
+        url: "http://{{ harbor_domain }}/api/v2.0/health"
+        status_code: 200
+      register: harbor_health
+      until: harbor_health.status == 200
+      retries: 20
+      delay: 5
+    - name: Verify all platform namespaces exist
+      ansible.builtin.command: kubectl get namespace {{ item }}
+      environment:
+        KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+      changed_when: false
+      loop: [longhorn-system, harbor, gitea]
+    - name: Verify packaged Traefik is available
+      ansible.builtin.command: kubectl rollout status daemonset/rke2-traefik -n kube-system --timeout=300s
+      environment:
+        KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+      changed_when: false
+    - name: Verify no workloads are waiting on image pulls
+      ansible.builtin.shell: |
+        set -euo pipefail
+        if kubectl get pods -A -o wide | grep -E 'ImagePullBackOff|ErrImagePull'; then
+          echo 'One or more pods cannot pull images.' >&2
+          exit 1
+        fi
+      args:
+        executable: /bin/bash
+      environment:
+        KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+      changed_when: false

@@ -1,0 +1,11 @@
+---
+rke2_version: v1.36.4+rke2r1
+rke2_cni: canal
+rke2_token: CHANGEME-rke2-cluster-token
+cluster_cidr: "10.42.0.0/16"
+service_cidr: "10.43.0.0/16"
+cluster_dns: "10.43.0.10"
+offline_install: false
+local_artifacts_dir: /opt/airgap/artifacts
+rke2_node_labels: []
+rke2_node_taints: []

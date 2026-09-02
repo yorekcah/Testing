@@ -1,70 +1,68 @@
 ---
-# Common variables for RKE2 and MetalLB deployment
+# Ansible Package 3.2 - RHEL 9 / RKE2 air-gap deployment
+offline_install: true
+airgap_registry_url: "harbor.airgap.local"
+airgap_registry_project: "library"
+airgap_registry: "{{ airgap_registry_url }}/{{ airgap_registry_project }}"
+local_artifacts_dir: /opt/airgap/artifacts
+local_charts_dir: /opt/airgap/charts
+local_images_dir: /opt/airgap/images
+local_rpm_dir: /opt/airgap/rpm
+local_collection_dir: /opt/airgap/collections
+local_cert_dir: /opt/airgap/certs
 
-# OS Configuration
-os_family: "RedHat"
-os_distribution: "RedHat"
-os_version: "9"
+# Air-gap validation / staging
+require_offline_bundle_validation: true
+import_bootstrap_images: true
+bootstrap_images_archive: "{{ local_images_dir }}/bootstrap-images.tar"
+verify_checksums: true
+allow_external_registry_fallback: false
 
-# Airgap Configuration
-airgap_enabled: true
-airgap_local_repo_path: "/opt/local-repo"
-airgap_container_images_path: "/opt/container-images"
-airgap_rke2_binary_path: "/opt/rke2-airgap"
-airgap_addons_path: "/opt/add-ons-airgap"
+# RHEL 9. Set true only if the connected environment uses subscription-manager.
+register_rhel: false
 
-# RKE2 Configuration
-rke2_version: "v1.28.10+rke2r1"
-rke2_install_dir: "/usr/local/bin"
-rke2_config_dir: "/etc/rancher/rke2"
-rke2_data_dir: "/var/lib/rancher/rke2"
-
-# Network Configuration
-pod_cidr: "10.42.0.0/16"
+# RKE2
+rke2_version: v1.36.4+rke2r1
+rke2_cni: canal
+rke2_token: "{{ vault_rke2_token | default('CHANGEME-rke2-cluster-token') }}"
+cluster_cidr: "10.42.0.0/16"
 service_cidr: "10.43.0.0/16"
-cluster_domain: "cluster.local"
+cluster_dns: "10.43.0.10"
 
-# MetalLB Configuration
-metallb_version: "v0.14.0"
-metallb_ip_range: "192.168.1.200-192.168.1.250"
-metallb_protocol: "layer2"
+# MetalLB
+metallb_version: "0.16.1"
+metallb_address_pool:
+  - 10.0.0.100-10.0.0.110
 
-# Load Balancer Configuration
-api_server_port: 6443
-api_server_loadbalancer_ip: "192.168.1.199"
+# Longhorn
+longhorn_version: "1.12.1"
+longhorn_default_replicas: 3
 
-# Add-on Versions
-helm_version: "v3.14.0"
-harbor_version: "v2.10.0"
-longhorn_version: "v1.6.0"
-velero_version: "v1.13.0"
-gitea_version: "v1.21.0"
+# Traefik ingress
+traefik_vip: "10.0.0.100"
+harbor_vip: "10.0.0.102"
 
-# Add-on Installation Flags
-install_harbor: false
-install_longhorn: false
-install_velero: false
-install_gitea: false
+# Harbor
+harbor_chart_version: "1.19.2"
+harbor_app_version: "v2.15.2"
+harbor_domain: "harbor.airgap.local"
+harbor_admin_password: "{{ vault_harbor_password | default('CHANGEME-harbor') }}"
+harbor_data_dir: /opt/harbor/data
 
-# Firewall Ports
-firewall_ports:
-  - 22/tcp    # SSH
-  - 6443/tcp  # Kubernetes API
-  - 8472/udp  # Flannel VXLAN
-  - 10250/tcp # Kubelet
-  - 179/tcp   # BGP (if using BGP mode)
-  - 80/tcp    # HTTP
-  - 443/tcp   # HTTPS
+# Gitea
+gitea_chart_version: "12.7.0"
+gitea_app_version: "1.27.3"
+gitea_domain: "gitea.airgap.local"
+gitea_admin_user: gitea_admin
+gitea_admin_password: "{{ vault_gitea_password | default('CHANGEME-gitea') }}"
 
-# System Configuration
-system_timezone: "UTC"
-ntp_servers:
-  - "time.google.com"
-  - "pool.ntp.org"
+# Tools
+k9s_version: "v0.51.0"
+helm_version: "v4.2.4"
 
-# RHEL 9 Specific
-rhel_subscription_enabled: false
-rhel_subscription_username: ""
-rhel_subscription_password: ""
-rhel_local_repo_enabled: true
-selinux_state: permissive
+# CA / registry TLS
+trust_local_ca: false
+selinux_state: enforcing
+rke2_selinux_version: "0.23"
+rke2_selinux_release: "1"
+local_ca_cert: "{{ local_cert_dir }}/ca.crt"

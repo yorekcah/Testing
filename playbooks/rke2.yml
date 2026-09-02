@@ -1,0 +1,37 @@
+---
+- name: Deploy RKE2 servers
+  hosts: rke2_servers
+  become: yes
+  serial: 1
+  roles:
+    - rke2_server
+
+- name: Deploy RKE2 agents
+  hosts: rke2_agents
+  become: yes
+  roles:
+    - rke2_agent
+
+- name: Place kubeconfig on jump host
+  hosts: jump
+  become: no
+  gather_facts: yes
+  tasks:
+    - name: Ensure kubeconfig directory exists
+      ansible.builtin.file:
+        path: "{{ ansible_env.HOME }}/.kube"
+        state: directory
+        mode: '0700'
+
+    - name: Read kubeconfig from first server
+      ansible.builtin.slurp:
+        src: /etc/rancher/rke2/rke2.yaml
+      register: rke2_kubeconfig_b64
+      delegate_to: "{{ groups['rke2_servers'][0] }}"
+      become: yes
+
+    - name: Write kubeconfig to jump host
+      ansible.builtin.copy:
+        content: "{{ rke2_kubeconfig_b64.content | b64decode | replace('127.0.0.1:6443', hostvars[groups['rke2_servers'][0]]['ansible_host'] ~ ':6443') }}"
+        dest: "{{ ansible_env.HOME }}/.kube/config"
+        mode: '0600'

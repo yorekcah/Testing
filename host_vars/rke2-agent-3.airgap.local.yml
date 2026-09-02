@@ -1,0 +1,6 @@
+---
+ansible_host: 10.0.0.23
+rke2_node_labels:
+  - node-role.kubernetes.io/worker=true
+  - longhorn-node=yes
+rke2_node_taints: []

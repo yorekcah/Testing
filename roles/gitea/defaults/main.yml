@@ -1,0 +1,8 @@
+---
+gitea_chart_version: "12.7.0"
+gitea_app_version: "1.27.3"
+gitea_domain: "gitea.airgap.local"
+gitea_admin_user: gitea_admin
+gitea_admin_password: CHANGEME-gitea
+offline_install: false
+local_charts_dir: /opt/airgap/charts

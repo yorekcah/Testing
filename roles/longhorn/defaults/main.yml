@@ -1,0 +1,5 @@
+---
+longhorn_version: "1.12.1"
+longhorn_default_replicas: 3
+offline_install: false
+local_charts_dir: /opt/airgap/charts

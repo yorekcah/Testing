@@ -1,0 +1,15 @@
+---
+- name: Validate offline bundle on jump host
+  hosts: jump
+  become: yes
+  gather_facts: yes
+  tasks:
+    - name: Ensure validator is present in bundle
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../scripts/validate-bundle.sh"
+      register: validator
+      failed_when: not validator.stat.exists
+
+    - name: Run offline bundle validator
+      ansible.builtin.command: "{{ playbook_dir }}/../scripts/validate-bundle.sh /opt/airgap"
+      changed_when: false

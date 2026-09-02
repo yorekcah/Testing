@@ -1,0 +1,27 @@
+---
+- name: Install k9s binary from local artifact
+  ansible.builtin.unarchive:
+    src: "{{ local_artifacts_dir }}/k9s_Linux_amd64.tar.gz"
+    dest: /usr/local/bin
+    remote_src: yes
+  become: yes
+  when: offline_install | bool
+
+- name: Install k9s online
+  ansible.builtin.get_url:
+    url: "https://github.com/derailed/k9s/releases/download/{{ k9s_version }}/k9s_Linux_amd64.tar.gz"
+    dest: /tmp/k9s.tar.gz
+    mode: '0644'
+  when: not offline_install | bool
+
+- name: Extract k9s online
+  ansible.builtin.unarchive:
+    src: /tmp/k9s.tar.gz
+    dest: /usr/local/bin
+    remote_src: yes
+  become: yes
+  when: not offline_install | bool
+
+- name: Verify k9s
+  ansible.builtin.command: k9s version
+  changed_when: false

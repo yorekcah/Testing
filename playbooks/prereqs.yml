@@ -1,0 +1,7 @@
+---
+- name: Validate and prepare RHEL 9 hosts for air-gapped RKE2
+  hosts: rke2_cluster:jump
+  become: yes
+  gather_facts: yes
+  roles:
+    - common

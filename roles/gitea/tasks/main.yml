@@ -1,0 +1,31 @@
+---
+- name: Add Gitea Helm repo (online)
+  ansible.builtin.shell: helm repo add gitea-charts https://dl.gitea.com/charts/ 2>/dev/null || true && helm repo update
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+  when: not offline_install | bool
+
+- name: Create Gitea namespace
+  ansible.builtin.shell: kubectl create namespace gitea --dry-run=client -o yaml | kubectl apply -f -
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Template Gitea values
+  ansible.builtin.template:
+    src: gitea-values.yaml.j2
+    dest: /tmp/gitea-values.yaml
+
+- name: Install Gitea
+  ansible.builtin.command: >
+    helm upgrade --install gitea
+    {{ (local_charts_dir ~ '/gitea-' ~ gitea_chart_version ~ '.tgz') if offline_install else 'gitea-charts/gitea' }}
+    --namespace gitea
+    --version {{ gitea_chart_version }}
+    --values /tmp/gitea-values.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Wait for Gitea
+  ansible.builtin.command: kubectl rollout status deployment gitea -n gitea --timeout=300s
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"

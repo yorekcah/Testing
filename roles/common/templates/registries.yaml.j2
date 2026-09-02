@@ -1,0 +1,33 @@
+mirrors:
+  docker.io:
+    endpoint:
+      - "http://{{ airgap_registry_url }}:80"
+    rewrite:
+      "^(.*)$": "{{ airgap_registry_project }}/$1"
+  registry.k8s.io:
+    endpoint:
+      - "http://{{ airgap_registry_url }}:80"
+    rewrite:
+      "^(.*)$": "{{ airgap_registry_project }}/$1"
+  quay.io:
+    endpoint:
+      - "http://{{ airgap_registry_url }}:80"
+    rewrite:
+      "^(.*)$": "{{ airgap_registry_project }}/$1"
+  gcr.io:
+    endpoint:
+      - "http://{{ airgap_registry_url }}:80"
+    rewrite:
+      "^(.*)$": "{{ airgap_registry_project }}/$1"
+  ghcr.io:
+    endpoint:
+      - "http://{{ airgap_registry_url }}:80"
+    rewrite:
+      "^(.*)$": "{{ airgap_registry_project }}/$1"
+  docker.gitea.com:
+    endpoint:
+      - "http://{{ airgap_registry_url }}:80"
+    rewrite:
+      "^(.*)$": "{{ airgap_registry_project }}/$1"
+# Bootstrap uses HTTP so Harbor can come up without a pre-staged server cert.
+# For production, switch endpoints to HTTPS and configure ca_file under configs.

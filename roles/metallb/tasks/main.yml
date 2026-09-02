@@ -1,0 +1,40 @@
+---
+- name: Create MetalLB namespace
+  ansible.builtin.shell: kubectl create namespace metallb-system --dry-run=client -o yaml | kubectl apply -f -
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Install MetalLB from local chart
+  ansible.builtin.command: >
+    helm upgrade --install metallb
+    {{ local_charts_dir }}/metallb-{{ metallb_version }}.tgz
+    --namespace metallb-system
+    --version {{ metallb_version }}
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+  when: offline_install | bool
+
+- name: Install MetalLB from online chart
+  ansible.builtin.shell: >
+    helm repo add metallb https://metallb.github.io/metallb 2>/dev/null || true && helm repo update &&
+    helm upgrade --install metallb metallb/metallb
+    --namespace metallb-system
+    --version {{ metallb_version }}
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+  when: not offline_install | bool
+
+- name: Wait for MetalLB controller
+  ansible.builtin.command: kubectl rollout status deployment metallb-controller -n metallb-system --timeout=300s
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Template MetalLB IPAddressPool
+  ansible.builtin.template:
+    src: addresspool.yaml.j2
+    dest: /tmp/metallb-addresspool.yaml
+
+- name: Apply MetalLB address pool
+  ansible.builtin.command: kubectl apply -f /tmp/metallb-addresspool.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"

@@ -1,0 +1,28 @@
+---
+- name: Add Longhorn chart repo (online)
+  ansible.builtin.shell: helm repo add longhorn https://charts.longhorn.io 2>/dev/null || true && helm repo update
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+  when: not offline_install | bool
+
+- name: Create Longhorn namespace
+  ansible.builtin.shell: kubectl create namespace longhorn-system --dry-run=client -o yaml | kubectl apply -f -
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Install Longhorn
+  ansible.builtin.command: >
+    helm upgrade --install longhorn
+    {{ (local_charts_dir ~ '/longhorn-' ~ longhorn_version ~ '.tgz') if offline_install else 'longhorn/longhorn' }}
+    --namespace longhorn-system
+    --version {{ longhorn_version }}
+    --set defaultSettings.defaultReplicaCount={{ longhorn_default_replicas }}
+    --set persistence.defaultClassReplicaCount={{ longhorn_default_replicas }}
+    --set ingress.enabled=false
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Wait for Longhorn manager
+  ansible.builtin.command: kubectl wait --namespace longhorn-system --for=condition=ready pod --selector=app=longhorn-manager --timeout=300s
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"

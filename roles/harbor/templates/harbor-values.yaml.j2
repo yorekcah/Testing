@@ -1,0 +1,37 @@
+expose:
+  type: loadBalancer
+  tls:
+    enabled: false
+  loadBalancer:
+    name: harbor
+    ports:
+      httpPort: 80
+      httpsPort: 443
+    annotations:
+      metallb.universe.tf/loadBalancerIPs: "{{ harbor_vip }}"
+externalURL: "http://{{ harbor_domain }}"
+harborAdminPassword: "{{ harbor_admin_password }}"
+persistence:
+  enabled: true
+  persistentVolumeClaim:
+    registry:
+      size: 50Gi
+      storageClass: longhorn
+    jobservice:
+      size: 5Gi
+      storageClass: longhorn
+    database:
+      size: 5Gi
+      storageClass: longhorn
+    redis:
+      size: 5Gi
+      storageClass: longhorn
+    trivy:
+      size: 5Gi
+      storageClass: longhorn
+chartmuseum:
+  enabled: false
+trivy:
+  enabled: false
+notary:
+  enabled: false

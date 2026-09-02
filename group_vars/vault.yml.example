@@ -1,0 +1,4 @@
+---
+vault_rke2_token: "CHANGE-ME-TO-A-LONG-RANDOM-TOKEN"
+vault_harbor_password: "CHANGE-ME-Harbor"
+vault_gitea_password: "CHANGE-ME-Gitea"

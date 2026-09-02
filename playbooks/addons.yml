@@ -1,0 +1,28 @@
+---
+# Bootstrap order matters in a true air-gap. All bootstrap images are imported
+# into containerd before any chart that needs them is installed.
+- name: Install Helm and kubectl on jump host
+  hosts: jump
+  become: no
+  roles:
+    - helm
+
+- name: Bootstrap MetalLB and Longhorn
+  hosts: jump
+  become: no
+  roles:
+    - metallb
+    - longhorn
+
+- name: Bootstrap Harbor
+  hosts: jump
+  become: no
+  roles:
+    - harbor
+
+- name: Deploy Gitea and K9s
+  hosts: jump
+  become: no
+  roles:
+    - gitea
+    - k9s

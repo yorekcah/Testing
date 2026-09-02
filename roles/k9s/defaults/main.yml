@@ -1,0 +1,4 @@
+---
+k9s_version: "v0.51.0"
+offline_install: false
+local_artifacts_dir: /opt/airgap/artifacts

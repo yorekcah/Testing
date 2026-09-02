@@ -1,0 +1,137 @@
+---
+- name: Add Harbor Helm repo (online)
+  ansible.builtin.shell: helm repo add harbor https://helm.goharbor.io 2>/dev/null || true && helm repo update
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+  when: not offline_install | bool
+
+- name: Create Harbor namespace
+  ansible.builtin.shell: kubectl create namespace harbor --dry-run=client -o yaml | kubectl apply -f -
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Template Harbor values
+  ansible.builtin.template:
+    src: harbor-values.yaml.j2
+    dest: /tmp/harbor-values.yaml
+    mode: '0600'
+
+- name: Install Harbor
+  ansible.builtin.command: >
+    helm upgrade --install harbor
+    {{ (local_charts_dir ~ '/harbor-' ~ harbor_chart_version ~ '.tgz') if offline_install else 'harbor/harbor' }}
+    --namespace harbor
+    --version {{ harbor_chart_version }}
+    --set harborAdminPassword={{ harbor_admin_password }}
+    --values /tmp/harbor-values.yaml
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Wait for Harbor core
+  ansible.builtin.command: kubectl rollout status deployment harbor-core -n harbor --timeout=900s
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Wait for Harbor registry
+  ansible.builtin.command: kubectl rollout status deployment harbor-registry -n harbor --timeout=900s
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Wait for Harbor portal
+  ansible.builtin.command: kubectl rollout status deployment harbor-portal -n harbor --timeout=900s
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Wait for Harbor jobservice
+  ansible.builtin.command: kubectl rollout status deployment harbor-jobservice -n harbor --timeout=900s
+  environment:
+    KUBECONFIG: "{{ ansible_env.HOME }}/.kube/config"
+
+- name: Wait for Harbor API health
+  ansible.builtin.uri:
+    url: "http://{{ harbor_domain }}/api/v2.0/health"
+    status_code: 200
+    return_content: true
+  register: harbor_health
+  until: harbor_health.status == 200 and (harbor_health.json.status | default('') == 'healthy')
+  retries: 60
+  delay: 10
+
+- name: Check Harbor library project
+  ansible.builtin.uri:
+    url: "http://{{ harbor_domain }}/api/v2.0/projects/library"
+    user: admin
+    password: "{{ harbor_admin_password }}"
+    force_basic_auth: true
+    status_code: [200, 404]
+  register: harbor_library
+
+- name: Create Harbor library project when absent
+  ansible.builtin.uri:
+    url: "http://{{ harbor_domain }}/api/v2.0/projects"
+    method: POST
+    user: admin
+    password: "{{ harbor_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      project_name: library
+      public: true
+    status_code: [201, 409]
+  when: harbor_library.status == 404
+
+- name: Make Harbor library project public for unauthenticated Kubernetes pulls
+  ansible.builtin.uri:
+    url: "http://{{ harbor_domain }}/api/v2.0/projects/library"
+    method: PUT
+    user: admin
+    password: "{{ harbor_admin_password }}"
+    force_basic_auth: true
+    body_format: json
+    body:
+      project_name: library
+      metadata:
+        public: "true"
+    status_code: [200, 204]
+
+- name: Seed Harbor from bootstrap images on first server
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ctr=(/var/lib/rancher/rke2/bin/ctr --address /run/k3s/containerd/containerd.sock --namespace k8s.io)
+    while IFS= read -r src; do
+      [[ -z "$src" ]] && continue
+      repo="${src#*/}"
+      dst="{{ airgap_registry }}/${repo}"
+      "${ctr[@]}" images inspect "$src" >/dev/null
+      "${ctr[@]}" images tag "$src" "$dst" --force
+      "${ctr[@]}" images push --plain-http --user "admin:{{ harbor_admin_password }}" "$dst"
+    done < "{{ local_images_dir }}/images.txt"
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ groups['rke2_servers'][0] }}"
+  become: yes
+  run_once: true
+
+- name: Verify a seeded image exists in Harbor
+  ansible.builtin.uri:
+    url: "http://{{ harbor_domain }}/api/v2.0/projects/library/repositories"
+    user: admin
+    password: "{{ harbor_admin_password }}"
+    force_basic_auth: true
+    status_code: 200
+  register: harbor_repositories
+
+- name: Verify containerd can pull back from Harbor
+  ansible.builtin.shell: |
+    set -euo pipefail
+    ctr=(/var/lib/rancher/rke2/bin/ctr --address /run/k3s/containerd/containerd.sock --namespace k8s.io)
+    src="$(head -n 1 '{{ local_images_dir }}/images.txt')"
+    repo="${src#*/}"
+    dst="{{ airgap_registry }}/${repo}"
+    "${ctr[@]}" images rm "$dst" >/dev/null 2>&1 || true
+    "${ctr[@]}" images pull --plain-http --user "admin:{{ harbor_admin_password }}" "$dst"
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ groups['rke2_servers'][0] }}"
+  become: yes
+  run_once: true

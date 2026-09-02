@@ -1,0 +1,31 @@
+token: {{ rke2_token }}
+{% if inventory_hostname != groups['rke2_servers'][0] %}
+server: https://{{ hostvars[groups['rke2_servers'][0]]['ansible_host'] }}:9345
+{% endif %}
+tls-san:
+  - {{ ansible_host }}
+  - {{ inventory_hostname }}
+cluster-cidr: {{ cluster_cidr }}
+service-cidr: {{ service_cidr }}
+cluster-dns: {{ cluster_dns }}
+cni: {{ rke2_cni }}
+selinux: true
+ingress-controller: traefik
+disable-default-registry-endpoint: true
+embedded-registry: true
+debug: false
+{% if rke2_node_labels is defined and rke2_node_labels | length > 0 %}
+node-label:
+{% for label in rke2_node_labels %}
+  - {{ label }}
+{% endfor %}
+{% endif %}
+{% if rke2_node_taints is defined and rke2_node_taints | length > 0 %}
+node-taint:
+{% for taint in rke2_node_taints %}
+  - {{ taint }}
+{% endfor %}
+{% endif %}
+kube-apiserver-arg:
+  - "audit-log-path=/var/log/kube-audit/audit.log"
+  - "audit-policy-file=/etc/rancher/rke2/audit-policy.yaml"

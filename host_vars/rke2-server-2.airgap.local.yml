@@ -1,0 +1,7 @@
+---
+ansible_host: 10.0.0.12
+rke2_server_init: false
+rke2_node_labels:
+  - node-role.kubernetes.io/control-plane=true
+  - node-role.kubernetes.io/etcd=true
+rke2_node_taints: []

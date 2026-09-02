@@ -1,0 +1,8 @@
+---
+# Defaults mirrored from group_vars; keep in sync for role independence
+offline_install: false
+trust_local_ca: false
+local_ca_cert: ""
+local_artifacts_dir: /opt/airgap/artifacts
+local_charts_dir: /opt/airgap/charts
+local_images_dir: /opt/airgap/images

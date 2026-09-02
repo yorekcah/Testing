@@ -1,0 +1,45 @@
+service:
+  http:
+    port: 3000
+  ssh:
+    port: 22
+ingress:
+  enabled: true
+  className: traefik
+  hosts:
+    - host: {{ gitea_domain }}
+      paths:
+        - path: /
+          pathType: Prefix
+image:
+  tag: "{{ gitea_app_version }}"
+gitea:
+  admin:
+    username: {{ gitea_admin_user }}
+    password: "{{ gitea_admin_password }}"
+    email: "admin@{{ gitea_domain }}"
+  config:
+    APP_NAME: Air-Gapped Gitea
+    server:
+      DOMAIN: {{ gitea_domain }}
+      ROOT_URL: http://{{ gitea_domain }}
+      SSH_DOMAIN: {{ gitea_domain }}
+persistence:
+  enabled: true
+  size: 10Gi
+  storageClass: longhorn
+postgresql:
+  enabled: true
+  persistence:
+    size: 5Gi
+    storageClass: longhorn
+postgresql-ha:
+  enabled: false
+valkey-cluster:
+  enabled: false
+valkey:
+  enabled: true
+  primary:
+    persistence:
+      storageClass: longhorn
+      size: 5Gi

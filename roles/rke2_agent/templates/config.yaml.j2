@@ -1,0 +1,16 @@
+server: https://{{ hostvars[groups['rke2_servers'][0]]['ansible_host'] }}:9345
+token: {{ rke2_token }}
+selinux: true
+disable-default-registry-endpoint: true
+{% if rke2_node_labels is defined and rke2_node_labels | length > 0 %}
+node-label:
+{% for label in rke2_node_labels %}
+  - {{ label }}
+{% endfor %}
+{% endif %}
+{% if rke2_node_taints is defined and rke2_node_taints | length > 0 %}
+node-taint:
+{% for taint in rke2_node_taints %}
+  - {{ taint }}
+{% endfor %}
+{% endif %}

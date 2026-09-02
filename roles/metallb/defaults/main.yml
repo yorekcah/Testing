@@ -1,0 +1,6 @@
+---
+metallb_version: "0.16.1"
+metallb_address_pool:
+  - 10.0.0.100-10.0.0.110
+offline_install: false
+local_charts_dir: /opt/airgap/charts
